@@ -12,15 +12,15 @@ static float get_lock_target_adjustment(void)
     
     /* Find out which lockpoints we're between in terms of speed..
      * Look for the lockpoint above our current speed (lp_upper) */
-    lockpoint lp_lower = state.lockpoints[0];
-    lockpoint lp_upper = state.lockpoints[lockpoint_count - 1];
+    lockpoint lp_lower = state.custom_mode.lockpoints[0];
+    lockpoint lp_upper = state.custom_mode.lockpoints[lockpoint_count - 1];
 
     for (int i = 0; i < lockpoint_count; i++)
     {
-        if (vehicle_speed <= state.lockpoints[i].speed)
+        if (vehicle_speed <= state.custom_mode.lockpoints[i].speed)
         {
-            lp_upper = state.lockpoints[i];
-            lp_lower = state.lockpoints[(i == 0) ? 0 : i - 1];
+            lp_upper = state.custom_mode.lockpoints[i];
+            lp_lower = state.custom_mode.lockpoints[(i == 0) ? 0 : i - 1];
             break;
         }
     }

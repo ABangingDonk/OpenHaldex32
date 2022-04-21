@@ -4,13 +4,16 @@
 #include "BluetoothSerial.h"
 #include "openhaldex_defs.h"
 
-#define CAN_DEBUG
+//#define CAN_DEBUG
+#define CAN_TEST_DATA
 //#define BT_SERIAL_DEBUG
-//#define BT_SERIAL_STACK_DEBUG
 #define STATE_DEBUG
+#define STACK_DEBUG
 
 #define CAN_STACK 2176
 #define BT_STACK 2304
+
+#define CAN_TX_RASTER_MS 500
 
 #define QUEUE_SEND(q, p, t) (uxQueueSpacesAvailable((q))) ? xQueueSendToBack((q), (p), (t)) : 0
 #define ARRAY_SIZE(array) (sizeof((array)) / sizeof((array)[0]))
@@ -58,12 +61,12 @@ typedef struct can_frame{
     BytesUnion data;
 }can_frame;
 
-typedef enum openhaldex_mode{
+typedef enum openhaldex_mode_id{
     MODE_STOCK,
     MODE_FWD,
     MODE_5050,
     MODE_CUSTOM
-}openhaldex_mode;
+}openhaldex_mode_id;
 
 typedef struct lockpoint{
     byte speed;
@@ -71,25 +74,35 @@ typedef struct lockpoint{
     byte intensity;
 }lockpoint;
 
+typedef struct openhaldex_custom_mode{
+    lockpoint lockpoints[NUM_LOCK_POINTS];
+    uint32_t lockpoint_rx;
+    uint32_t lockpoint_count;
+}openhaldex_custom_mode;
+
 typedef struct openhaldex_state {
-    openhaldex_mode mode;
+    openhaldex_mode_id mode;
+    openhaldex_custom_mode custom_mode;
     float ped_threshold;
     byte target_lock;
     byte vehicle_speed;
     byte haldex_state;
     byte haldex_engagement;
-    lockpoint lockpoints[NUM_LOCK_POINTS];
 }openhaldex_state;
 
 typedef struct openhaldex_bt {
     BluetoothSerial *SerialBT;
-    QueueHandle_t bt_q;
-    bool connected;
+    SemaphoreHandle_t sem;
+    QueueHandle_t bt_process_q;
+    QueueHandle_t bt_tx_q;
+    TaskHandle_t bt_rx_task;
+    TaskHandle_t bt_tx_task;
+    TaskHandle_t bt_process_task;
 }openhaldex_bt;
 
 typedef struct bt_packet {
     byte len;
-    BytesUnion data;
+    byte data[6];
 }bt_packet;
 
 extern openhaldex_state state;
