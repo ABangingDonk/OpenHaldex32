@@ -1,10 +1,7 @@
 #include "openhaldex.h"
 
-//static uint16_t lockpoint_rx = 0;
-static uint8_t lockpoint_count = 0;
-static uint8_t vehicle_speed = 0;
-static float lock_target = 0;
-static float ped_value = 0;
+float lock_target = 0;
+float ped_value = 0;
 
 static float get_lock_target_adjustment(void)
 {
@@ -13,9 +10,9 @@ static float get_lock_target_adjustment(void)
     /* Find out which lockpoints we're between in terms of speed..
      * Look for the lockpoint above our current speed (lp_upper) */
     lockpoint lp_lower = state.custom_mode.lockpoints[0];
-    lockpoint lp_upper = state.custom_mode.lockpoints[lockpoint_count - 1];
+    lockpoint lp_upper = state.custom_mode.lockpoints[state.custom_mode.lockpoint_count - 1];
 
-    for (int i = 0; i < lockpoint_count; i++)
+    for (int i = 0; i < state.custom_mode.lockpoint_count; i++)
     {
         if (vehicle_speed <= state.custom_mode.lockpoints[i].speed)
         {
@@ -36,7 +33,7 @@ static float get_lock_target_adjustment(void)
     }
 
     /* If locking at all... */
-    if (ped_value > state.ped_threshold || state.ped_threshold == 0)
+    if (ped_value >= state.ped_threshold || state.ped_threshold == 0)
     {
         /* Need to interpolate */
         float inter = (float)(lp_upper.speed - lp_lower.speed) / (float)(vehicle_speed - lp_lower.speed);
@@ -56,7 +53,7 @@ static uint8_t get_lock_target_adjusted_value(uint8_t value)
 {    
     if (state.mode == MODE_5050)
     {
-        if (ped_value > state.ped_threshold || state.ped_threshold == 0)
+        if (ped_value >= state.ped_threshold || state.ped_threshold == 0)
         {
             return value;
         }
@@ -67,6 +64,12 @@ static uint8_t get_lock_target_adjusted_value(uint8_t value)
     {
         float target = get_lock_target_adjustment();
         lock_target = target;
+
+        // Potentially avoid doing math below..
+        if (target == 0)
+        {
+            return 0;
+        }
         
         /*
          * Hackery to get the response closer to the target... we are trying to control the
@@ -82,6 +85,11 @@ static uint8_t get_lock_target_adjusted_value(uint8_t value)
 void get_lock_data(can_frame *frame)
 {   
     uint8_t adjusted_slip;
+
+#ifdef STATE_DEBUG
+    Serial.printf("get_lock_data() before 0x%02x\n", frame->data.bytes[2]);
+#endif
+
     switch(frame->id)
     {
         case MOTOR1_ID:
@@ -113,4 +121,9 @@ void get_lock_data(can_frame *frame)
             frame->data.bytes[3] = 0xa;
             break;
     }
+
+#ifdef STATE_DEBUG
+    Serial.printf("get_lock_data() after 0x%02x\n", frame->data.bytes[2]);
+#endif
+
 }

@@ -3,17 +3,19 @@
 #include <mcp_can.h>
 #include "BluetoothSerial.h"
 #include "openhaldex_defs.h"
+#include <Preferences.h>
 
-//#define CAN_DEBUG
-#define CAN_TEST_DATA
-//#define BT_SERIAL_DEBUG
+#define CAN_DEBUG
+//#define CAN_TEST_DATA
+//#define BT_SERIAL_DEBUG_RX
+//#define BT_SERIAL_DEBUG_TX
 #define STATE_DEBUG
-#define STACK_DEBUG
+//#define STACK_DEBUG
 
 #define CAN_STACK 2176
 #define BT_STACK 2304
 
-#define CAN_TX_RASTER_MS 500
+#define CAN_TX_RASTER_MS 5
 
 #define QUEUE_SEND(q, p, t) (uxQueueSpacesAvailable((q))) ? xQueueSendToBack((q), (p), (t)) : 0
 #define ARRAY_SIZE(array) (sizeof((array)) / sizeof((array)[0]))
@@ -76,18 +78,14 @@ typedef struct lockpoint{
 
 typedef struct openhaldex_custom_mode{
     lockpoint lockpoints[NUM_LOCK_POINTS];
-    uint32_t lockpoint_rx;
-    uint32_t lockpoint_count;
+    uint16_t lockpoint_rx;
+    byte lockpoint_count;
 }openhaldex_custom_mode;
 
 typedef struct openhaldex_state {
     openhaldex_mode_id mode;
     openhaldex_custom_mode custom_mode;
     float ped_threshold;
-    byte target_lock;
-    byte vehicle_speed;
-    byte haldex_state;
-    byte haldex_engagement;
 }openhaldex_state;
 
 typedef struct openhaldex_bt {
@@ -106,5 +104,10 @@ typedef struct bt_packet {
 }bt_packet;
 
 extern openhaldex_state state;
+extern byte vehicle_speed;
+extern byte haldex_engagement;
+extern byte haldex_state;
+extern float lock_target;
+extern float ped_value;
 
 extern void get_lock_data(can_frame *frame);

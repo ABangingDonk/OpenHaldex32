@@ -6,6 +6,10 @@
 
 openhaldex_bt bt;
 openhaldex_state state;
+Preferences preferences;
+byte haldex_state;
+byte haldex_engagement;
+byte vehicle_speed;
 
 can_s body_can = {
     0,                          // CAN status
@@ -73,18 +77,18 @@ bool bt_read_msg_buf(byte terminator, bt_packet *packet)
     return false;
 }
 
+#ifdef CAN_TEST_DATA
 void send_test_data(void *params)
 {
     while (1)
     {
-#if 1
         can_frame body_frame = {0};
         body_frame.id = HALDEX_ID;
         body_frame.len = 2;
         body_frame.data.bytes[0] = 0x00;
         body_frame.data.bytes[1] = 0x7f;
         QUEUE_SEND(body_can.tx_q, &body_frame, 100 / portTICK_PERIOD_MS);
-#endif        
+
         can_frame haldex_frame = {0};
         haldex_frame.id = MOTOR1_ID;
         haldex_frame.len = 8;
@@ -102,6 +106,7 @@ void send_test_data(void *params)
         //vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
 }
+#endif
 
 void body_can_rx(void *params)
 {
@@ -113,7 +118,25 @@ void body_can_rx(void *params)
 #ifdef CAN_DEBUG
             Serial.printf("Body CAN RX 0x%03x: [%d]\n", frame.id, frame.len);
 #endif
-            get_lock_data(&frame);
+            switch(frame.id)
+            {
+                case MOTOR1_ID:
+                    ped_value = frame.data.bytes[5] * 0.4;
+                    if (state.mode == MODE_FWD)
+                    {
+                        memset(&frame.data, 0, frame.len);
+                    }
+                    break;
+                case MOTOR2_ID:
+                    vehicle_speed = (byte)((frame.data.bytes[3] * 100 * 128) / 10000);
+                    break;
+            }
+            
+            if (state.mode == MODE_5050 || state.mode == MODE_CUSTOM)
+            {
+                get_lock_data(&frame);
+            }
+
             QUEUE_SEND(haldex_can.tx_q, &frame, 100 / portTICK_PERIOD_MS);
         }
         else
@@ -151,9 +174,9 @@ void haldex_can_rx(void *params)
             Serial.printf("Haldex CAN RX 0x%03x: [%d]\n", frame.id, frame.len);
 #endif
             QUEUE_SEND(body_can.tx_q, &frame, 100 / portTICK_PERIOD_MS);
-            state.haldex_state = frame.data.bytes[0];
-            state.haldex_engagement = frame.data.bytes[1] == SERIAL_PACKET_END ? 0xfe
-                                                                               : frame.data.bytes[1];
+            haldex_state = frame.data.bytes[0];
+            haldex_engagement = frame.data.bytes[1] == SERIAL_PACKET_END ? 0xfe
+                                                                         : frame.data.bytes[1];
         }
         else
         {
@@ -212,15 +235,15 @@ void bt_send_status(void *params)
     {
         bt_packet packet;
         packet.data[0] = APP_MSG_STATUS;
-        packet.data[1] = state.haldex_state;
-        packet.data[2] = state.haldex_engagement;
-        packet.data[3] = state.target_lock;
-        packet.data[4] = state.vehicle_speed;
+        packet.data[1] = haldex_state;
+        packet.data[2] = haldex_engagement;
+        packet.data[3] = lock_target;
+        packet.data[4] = vehicle_speed;
         packet.data[5] = SERIAL_PACKET_END;
         packet.len = 6;
         QUEUE_SEND(bt.bt_tx_q, &packet, 100 / portTICK_PERIOD_MS);
 
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
+        vTaskDelay(250 / portTICK_PERIOD_MS);
     }
 }
 
@@ -239,6 +262,21 @@ void bt_process(void *params)
                     state.mode = packet.data[1] <= MODE_CUSTOM ? (openhaldex_mode_id)packet.data[1]
                                                                : MODE_STOCK;
                     state.ped_threshold = packet.data[2];
+                    if (state.mode == MODE_5050)
+                    {
+                        if (ped_value >= state.ped_threshold || state.ped_threshold == 0)
+                        {
+                            lock_target = 100;
+                        }
+                        else
+                        {
+                            lock_target = 0;
+                        }
+                    }
+                    else if (state.mode == MODE_FWD)
+                    {
+                        lock_target = 0;
+                    }
                     break;
                 case APP_MSG_CUSTOM_DATA:
                     lockpoint_index = packet.data[1];
@@ -299,7 +337,9 @@ void bt_tx(void *params)
         if (bt.SerialBT->connected())
         {
             bt_send_msg_buf(&packet);
+#ifdef BT_SERIAL_DEBUG_TX
             Serial.write(packet.data, packet.len);
+#endif
         }
         vTaskDelay(50 / portTICK_PERIOD_MS);
     }
@@ -315,7 +355,7 @@ void bt_rx(void *params)
             {
                 bt_packet packet;
                 bt_read_msg_buf(SERIAL_PACKET_END, &packet);
-#ifdef BT_SERIAL_DEBUG
+#ifdef BT_SERIAL_DEBUG_RX
                 Serial.write(packet.data, packet.len);
 #endif
                 QUEUE_SEND(bt.bt_process_q, &packet, 100 / portTICK_PERIOD_MS);
@@ -326,17 +366,40 @@ void bt_rx(void *params)
     }
 }
 
+void save_prefs(void *params)
+{
+    while (1)
+    {
+        openhaldex_state saved_state;
+        if (preferences.getBytes("state", &saved_state, sizeof(state)) != 0)
+        {
+            if (memcmp(&saved_state, &state, sizeof(state)) != 0)
+            {
+                preferences.putBytes("state", &state, sizeof(state));
+            }
+        }
+
+        vTaskDelay(10000 / portTICK_PERIOD_MS);
+    }
+}
+
 void setup()
 {
     Serial.begin(115200);
     Serial.println("\nOpenHaldex32 init");
 
-    state.mode = MODE_STOCK;
-    state.haldex_state = 0x11;
-    state.haldex_engagement = 0x22;
-    state.target_lock = 0x33;
-    state.vehicle_speed = 0x44;
-    state.ped_threshold = 5;
+    preferences.begin("openhaldex", false);
+
+    if (preferences.getBytes("state", &state, sizeof(state)) == 0)
+    {
+        memset(&state, 0, sizeof(state));
+        Serial.println("Previous state not found, defaults loaded");
+        preferences.putBytes("state", &state, sizeof(state));
+    }
+    else
+    {
+        Serial.println("Loaded previous state");
+    }
 
     body_can.spi_interface = new SPIClass(HSPI);
     haldex_can.spi_interface = new SPIClass(VSPI);
@@ -444,6 +507,15 @@ void setup()
         bt_send_status,
         "bt_send_status",
         1024,
+        NULL,
+        1,
+        NULL
+    );
+
+    xTaskCreate(
+        save_prefs,
+        "save_prefs",
+        2048,
         NULL,
         1,
         NULL
