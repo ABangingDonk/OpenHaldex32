@@ -7,11 +7,11 @@
 #include "openhaldex_can.h"
 
 /* Defines */
-#define CAN_DEBUG
-//#define CAN_TEST_DATA
+//#define CAN_DEBUG
+#define CAN_TEST_DATA
 //#define BT_SERIAL_DEBUG_RX
 //#define BT_SERIAL_DEBUG_TX
-#define STATE_DEBUG
+//#define STATE_DEBUG
 //#define STACK_DEBUG
 
 /* Globals */

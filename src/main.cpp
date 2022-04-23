@@ -18,7 +18,8 @@ can_s body_can = {
     NULL,                       // RX task
     NULL,                       // TX task
     NULL,                       // TX queue
-    NULL,                       // Semaphore
+    NULL,                       // RX semaphore
+    NULL,                       // TX semaphore
     "Body"                      // Name
 };
 
@@ -29,16 +30,17 @@ can_s haldex_can = {
     NULL,                       // RX task
     NULL,                       // TX task
     NULL,                       // TX queue
-    NULL,                       // Semaphore
+    NULL,                       // RX semaphore
+    NULL,                       // TX semaphore
     "Haldex"                    // Name
 };
 
 bool can_send_msg_buf(can_s *can, can_frame *frame)
 {
-    if (xSemaphoreTake(can->sem, 100 / portTICK_PERIOD_MS))
+    if (xSemaphoreTake(can->tx_sem, 100 / portTICK_PERIOD_MS))
     {
         can->can_interface->sendMsgBuf(frame->id, frame->len, frame->data.bytes);
-        xSemaphoreGive(can->sem);
+        xSemaphoreGive(can->tx_sem);
         return true;
     }
     return false;
@@ -46,10 +48,10 @@ bool can_send_msg_buf(can_s *can, can_frame *frame)
 
 bool can_read_msg_buf(can_s *can, can_frame *frame)
 {
-    if (xSemaphoreTake(can->sem, 100 / portTICK_PERIOD_MS))
+    if (xSemaphoreTake(can->tx_sem, 100 / portTICK_PERIOD_MS))
     {
         can->can_interface->readMsgBuf(&frame->id, &frame->len, frame->data.bytes);
-        xSemaphoreGive(can->sem);
+        xSemaphoreGive(can->tx_sem);
         return true;
     }
     return false;
@@ -77,17 +79,23 @@ bool bt_read_msg_buf(byte terminator, bt_packet *packet)
     return false;
 }
 
+IRAM_ATTR
 void body_can_isr(void)
 {
-    if (xTaskResumeFromISR(body_can.rx_task))
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    xSemaphoreGiveFromISR(body_can.rx_sem, &xHigherPriorityTaskWoken);
+    if (xHigherPriorityTaskWoken)
     {
         portYIELD_FROM_ISR();
     }
 }
 
+IRAM_ATTR
 void haldex_can_isr(void)
 {
-    if (xTaskResumeFromISR(haldex_can.rx_task))
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    xSemaphoreGiveFromISR(haldex_can.rx_sem, &xHigherPriorityTaskWoken);
+    if (xHigherPriorityTaskWoken)
     {
         portYIELD_FROM_ISR();
     }
@@ -130,10 +138,15 @@ void setup()
     bt.bt_process_q = xQueueCreate(32, sizeof(bt_packet));
     bt.bt_tx_q = xQueueCreate(32, sizeof(bt_packet));
 
-    body_can.sem = xSemaphoreCreateMutex();
-    xSemaphoreGive(body_can.sem);
-    haldex_can.sem = xSemaphoreCreateMutex();
-    xSemaphoreGive(haldex_can.sem);
+
+    body_can.rx_sem = xSemaphoreCreateBinary();
+    body_can.tx_sem = xSemaphoreCreateMutex();
+    xSemaphoreGive(body_can.tx_sem);
+
+    haldex_can.rx_sem = xSemaphoreCreateBinary();
+    haldex_can.tx_sem = xSemaphoreCreateMutex();
+    xSemaphoreGive(haldex_can.tx_sem);
+
     bt.sem = xSemaphoreCreateMutex();
     xSemaphoreGive(bt.sem);
 
@@ -152,6 +165,7 @@ void setup()
 
     // init CAN0 bus, baudrate: 500k@16MHz
     body_can.status = body_can.can_interface->begin(MCP_STD, CAN_500KBPS, MCP_8MHZ);
+    //body_can.can_interface->enOneShotTX();
     if(body_can.status == CAN_OK)
     {
         body_can.can_interface->init_Filt(0, 0, 0x080);
@@ -173,6 +187,7 @@ void setup()
     
     // init CAN1 bus, baudrate: 500k@16MHz
     haldex_can.status = haldex_can.can_interface->begin(MCP_STD, CAN_500KBPS, MCP_8MHZ);
+    //haldex_can.can_interface->enOneShotTX();
     if(haldex_can.status == CAN_OK)
     {
         haldex_can.can_interface->init_Filt(0, 0, 0x2C0);

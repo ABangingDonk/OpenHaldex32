@@ -12,9 +12,11 @@ void bt_send_status(void *params)
         packet.data[4] = vehicle_speed;
         packet.data[5] = SERIAL_PACKET_END;
         packet.len = 6;
-        QUEUE_SEND(bt.bt_tx_q, &packet, 100 / portTICK_PERIOD_MS);
+        QUEUE_SEND(bt.bt_tx_q, &packet);
 
-        vTaskDelay(250 / portTICK_PERIOD_MS);
+        haldex_state = 0;
+
+        vTaskDelay(50 / portTICK_PERIOD_MS);
     }
 }
 
@@ -23,7 +25,7 @@ void bt_process(void *params)
     while (1)
     {
         bt_packet packet;
-        if (xQueueReceive(bt.bt_process_q, &packet, 10 / portTICK_PERIOD_MS))
+        if (xQueueReceive(bt.bt_process_q, &packet, 0))
         {
             byte lockpoint_index;
             bt_packet tx_packet;
@@ -72,7 +74,7 @@ void bt_process(void *params)
                             tx_packet.data[4] = SERIAL_PACKET_END;
                             tx_packet.len = 5;
 
-                            QUEUE_SEND(bt.bt_tx_q, &tx_packet, 100 / portTICK_PERIOD_MS);
+                            QUEUE_SEND(bt.bt_tx_q, &tx_packet);
                             break;
                         case DATA_CTRL_CLEAR:
                             state.custom_mode.lockpoint_rx = 0;
@@ -87,14 +89,14 @@ void bt_process(void *params)
                             tx_packet.data[4] = SERIAL_PACKET_END;
                             tx_packet.len = 5;
 
-                            QUEUE_SEND(bt.bt_tx_q, &tx_packet, 100 / portTICK_PERIOD_MS);
+                            QUEUE_SEND(bt.bt_tx_q, &tx_packet);
                             break;
                     }
                     break;
             }
         }
 
-        vTaskDelay(50 / portTICK_PERIOD_MS);
+        vTaskSuspend(NULL);
     }
 }
 
@@ -103,7 +105,7 @@ void bt_tx(void *params)
     while (1)
     {
         bt_packet packet;
-        xQueueReceive(bt.bt_tx_q, &packet, 10 / portTICK_PERIOD_MS);
+        xQueueReceive(bt.bt_tx_q, &packet, portMAX_DELAY);
 
         if (bt.SerialBT->connected())
         {
@@ -112,7 +114,6 @@ void bt_tx(void *params)
             Serial.write(packet.data, packet.len);
 #endif
         }
-        vTaskDelay(50 / portTICK_PERIOD_MS);
     }
 }
 
@@ -129,11 +130,12 @@ void bt_rx(void *params)
 #ifdef BT_SERIAL_DEBUG_RX
                 Serial.write(packet.data, packet.len);
 #endif
-                QUEUE_SEND(bt.bt_process_q, &packet, 100 / portTICK_PERIOD_MS);
+                vTaskResume(bt.bt_process_task);
+                QUEUE_SEND(bt.bt_process_q, &packet);
             }
 
         }
-        vTaskDelay(50 / portTICK_PERIOD_MS);
+        vTaskDelay(125 / portTICK_PERIOD_MS);
     }
 }
 
@@ -165,7 +167,11 @@ void send_test_data(void *params)
         body_frame.len = 2;
         body_frame.data.bytes[0] = 0x00;
         body_frame.data.bytes[1] = 0x7f;
-        QUEUE_SEND(body_can.tx_q, &body_frame, 100 / portTICK_PERIOD_MS);
+        int q_result = QUEUE_SEND(body_can.tx_q, &body_frame);
+        if (q_result != pdTRUE)
+        {
+            Serial.printf("Body CAN cannot forward to haldex (%d)\n", q_result);
+        }
 
         can_frame haldex_frame = {0};
         haldex_frame.id = MOTOR1_ID;
@@ -178,7 +184,11 @@ void send_test_data(void *params)
         haldex_frame.data.bytes[5] = 0xf0;
         haldex_frame.data.bytes[6] = 0x20;
         haldex_frame.data.bytes[7] = 0xf0;
-        QUEUE_SEND(haldex_can.tx_q, &haldex_frame, 100 / portTICK_PERIOD_MS);
+        q_result = QUEUE_SEND(haldex_can.tx_q, &haldex_frame);
+        if (q_result != pdTRUE)
+        {
+            Serial.printf("Haldex CAN cannot forward to body (%d)\n", q_result);
+        }
 
         vTaskDelete(NULL);
         //vTaskDelay(1000 / portTICK_PERIOD_MS);
@@ -190,8 +200,9 @@ void body_can_rx(void *params)
 {
     while (1)
     {
+        xSemaphoreTake(body_can.rx_sem, portMAX_DELAY);
         can_frame frame = {0};
-        if (can_read_msg_buf(&body_can, &frame))
+        if (can_read_msg_buf(&body_can, &frame) && frame.id != 0)
         {
 #ifdef CAN_DEBUG
             Serial.printf("Body CAN RX 0x%03x: [%d]\n", frame.id, frame.len);
@@ -204,6 +215,7 @@ void body_can_rx(void *params)
                     {
                         memset(&frame.data, 0, frame.len);
                     }
+                    vehicle_speed += 2;
                     break;
                 case MOTOR2_ID:
                     vehicle_speed = (byte)((frame.data.bytes[3] * 100 * 128) / 10000);
@@ -215,13 +227,22 @@ void body_can_rx(void *params)
                 get_lock_data(&frame);
             }
 
-            QUEUE_SEND(haldex_can.tx_q, &frame, 100 / portTICK_PERIOD_MS);
+            int q_result = QUEUE_SEND(haldex_can.tx_q, &frame);
+            if (q_result != pdTRUE)
+            {
+                Serial.printf("Body CAN cannot forward to haldex (%d)\n", q_result);
+            }
+#ifdef CAN_DEBUG
+            else
+            {
+                Serial.printf("Haldex CAN TX queue %d\n", uxQueueMessagesWaiting(haldex_can.tx_q));
+            }
+#endif
         }
-        else
+        else if (frame.id)
         {
             Serial.println("Body RX cannot read");
         }
-        vTaskSuspend(NULL);
     }
 }
 
@@ -230,14 +251,14 @@ void body_can_tx(void *params)
     while (1)
     {
         can_frame frame = {0};
-        if (xQueueReceive(body_can.tx_q, &frame, 10 / portTICK_PERIOD_MS))
+        if (xQueueReceive(body_can.tx_q, &frame, portMAX_DELAY))
         {
             if (!can_send_msg_buf(&body_can, &frame))
             {
                 Serial.println("Body TX busy");
             }
         }
-        vTaskDelay(CAN_TX_RASTER_MS / portTICK_PERIOD_MS);
+        //vTaskDelay(CAN_TX_RELIEF_MS / portTICK_PERIOD_MS);
     }
 }
 
@@ -245,22 +266,32 @@ void haldex_can_rx(void *params)
 {
     while (1)
     {
+        xSemaphoreTake(haldex_can.rx_sem, portMAX_DELAY);
         can_frame frame = {0};
-        if (can_read_msg_buf(&haldex_can, &frame))
+        if (can_read_msg_buf(&haldex_can, &frame) && frame.id != 0)
         {
 #ifdef CAN_DEBUG
             Serial.printf("Haldex CAN RX 0x%03x: [%d]\n", frame.id, frame.len);
 #endif
-            QUEUE_SEND(body_can.tx_q, &frame, 100 / portTICK_PERIOD_MS);
+            int q_result = QUEUE_SEND(body_can.tx_q, &frame);
+            if (q_result != pdTRUE)
+            {
+                Serial.printf("Haldex CAN cannot forward to body (%d)\n", q_result);
+            }
+#ifdef CAN_DEBUG
+            else
+            {
+                Serial.printf("Body CAN TX queue %d\n", uxQueueMessagesWaiting(body_can.tx_q));
+            }
+#endif
             haldex_state = frame.data.bytes[0];
             haldex_engagement = frame.data.bytes[1] == SERIAL_PACKET_END ? 0xfe
                                                                          : frame.data.bytes[1];
         }
-        else
+        else if (frame.id)
         {
             Serial.println("Haldex RX cannot read");
         }
-        vTaskSuspend(NULL);
     }
 }
 
@@ -269,13 +300,13 @@ void haldex_can_tx(void *params)
     while (1)
     {
         can_frame frame = {0};
-        if (xQueueReceive(haldex_can.tx_q, &frame, 10 / portTICK_PERIOD_MS))
+        if (xQueueReceive(haldex_can.tx_q, &frame, portMAX_DELAY))
         {
             if (!can_send_msg_buf(&haldex_can, &frame))
             {
                 Serial.println("Haldex TX busy");
             }
         }
-        vTaskDelay(CAN_TX_RASTER_MS / portTICK_PERIOD_MS);
+        //vTaskDelay(CAN_TX_RELIEF_MS / portTICK_PERIOD_MS);
     }
 }
