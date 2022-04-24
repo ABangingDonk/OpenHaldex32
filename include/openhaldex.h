@@ -7,7 +7,7 @@
 #include "openhaldex_can.h"
 
 /* Defines */
-//#define CAN_DEBUG
+#define CAN_DEBUG
 #define CAN_TEST_DATA
 //#define BT_SERIAL_DEBUG_RX
 //#define BT_SERIAL_DEBUG_TX
@@ -40,7 +40,9 @@ extern void body_can_rx(void *params);
 extern void body_can_tx(void *params);
 extern void haldex_can_rx(void *params);
 extern void haldex_can_tx(void *params);
-extern bool can_send_msg_buf(can_s *can, can_frame *frame);
-extern bool can_read_msg_buf(can_s *can, can_frame *frame);
+extern byte can_send_msg_buf(can_s *can, can_frame *frame);
+extern byte can_read_msg_buf(can_s *can, can_frame *frame);
 extern bool bt_send_msg_buf(bt_packet *packet);
 extern bool bt_read_msg_buf(byte terminator, bt_packet *packet);
+extern void body_can_isr(void);
+extern void haldex_can_isr(void);

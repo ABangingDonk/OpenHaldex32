@@ -23,7 +23,7 @@
 #define BT_STACK 2304
 
 #define CAN_TX_RELIEF_MS 10
-#define QUEUE_SEND_WAIT (20 / portTICK_PERIOD_MS)
+#define QUEUE_SEND_WAIT (0 / portTICK_PERIOD_MS)
 #define QUEUE_SEND(q, p) (uxQueueSpacesAvailable((q))) ? xQueueSendToBack((q), (p), QUEUE_SEND_WAIT) : 0
 #define ARRAY_SIZE(array) (sizeof((array)) / sizeof((array)[0]))
 
@@ -34,8 +34,7 @@ typedef struct can_s{
     TaskHandle_t rx_task;
     TaskHandle_t tx_task;
     QueueHandle_t tx_q;
-    SemaphoreHandle_t rx_sem;
-    SemaphoreHandle_t tx_sem;
+    SemaphoreHandle_t spi_sem;
     const char* name;
 }can_s;
 
@@ -54,7 +53,8 @@ typedef struct lockpoint{
 
 typedef struct openhaldex_custom_mode{
     lockpoint lockpoints[NUM_LOCK_POINTS];
-    uint16_t lockpoint_rx;
+    byte lockpoint_rx_h;
+    byte lockpoint_rx_l;
     byte lockpoint_count;
 }openhaldex_custom_mode;
 

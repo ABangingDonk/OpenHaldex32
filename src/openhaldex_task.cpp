@@ -14,9 +14,9 @@ void bt_send_status(void *params)
         packet.len = 6;
         QUEUE_SEND(bt.bt_tx_q, &packet);
 
-        haldex_state = 0;
+        //haldex_state = 0;
 
-        vTaskDelay(50 / portTICK_PERIOD_MS);
+        vTaskDelay(250 / portTICK_PERIOD_MS);
     }
 }
 
@@ -25,7 +25,7 @@ void bt_process(void *params)
     while (1)
     {
         bt_packet packet;
-        if (xQueueReceive(bt.bt_process_q, &packet, 0))
+        if (xQueueReceive(bt.bt_process_q, &packet, portMAX_DELAY))
         {
             byte lockpoint_index;
             bt_packet tx_packet;
@@ -59,8 +59,22 @@ void bt_process(void *params)
                         state.custom_mode.lockpoints[lockpoint_index].lock = packet.data[3];
                         state.custom_mode.lockpoints[lockpoint_index].intensity = packet.data[4];
 
-                        state.custom_mode.lockpoint_rx |= (1 << lockpoint_index);
+                        if (lockpoint_index > 6)
+                        {
+                            state.custom_mode.lockpoint_rx_h |= (1 << (lockpoint_index - 7));
+                        }
+                        else
+                        {
+                            state.custom_mode.lockpoint_rx_l |= (1 << lockpoint_index);
+                        }
                         state.custom_mode.lockpoint_count++;
+#ifdef STATE_DEBUG
+                        Serial.printf("lockpoint[%d] low 0x%x high 0x%x (count %d)\n",
+                                      lockpoint_index,
+                                      state.custom_mode.lockpoint_rx_l,
+                                      state.custom_mode.lockpoint_rx_h,
+                                      state.custom_mode.lockpoint_count);
+#endif
                     }
                     break;
                 case APP_MSG_CUSTOM_CTRL:
@@ -69,15 +83,16 @@ void bt_process(void *params)
                         case DATA_CTRL_CHECK_LOCKPOINTS:
                             tx_packet.data[0] = APP_MSG_CUSTOM_CTRL;
                             tx_packet.data[1] = DATA_CTRL_CHECK_LOCKPOINTS;
-                            tx_packet.data[2] = state.custom_mode.lockpoint_rx & 0xff;
-                            tx_packet.data[3] = (state.custom_mode.lockpoint_rx << 8) & 0xff;
+                            tx_packet.data[2] = state.custom_mode.lockpoint_rx_l;
+                            tx_packet.data[3] = state.custom_mode.lockpoint_rx_h;
                             tx_packet.data[4] = SERIAL_PACKET_END;
                             tx_packet.len = 5;
 
                             QUEUE_SEND(bt.bt_tx_q, &tx_packet);
                             break;
                         case DATA_CTRL_CLEAR:
-                            state.custom_mode.lockpoint_rx = 0;
+                            state.custom_mode.lockpoint_rx_l = 0;
+                            state.custom_mode.lockpoint_rx_h = 0;
                             state.custom_mode.lockpoint_count = 0;
                             memset(state.custom_mode.lockpoints, 0, sizeof(state.custom_mode.lockpoints));
                             break;
@@ -95,8 +110,6 @@ void bt_process(void *params)
                     break;
             }
         }
-
-        vTaskSuspend(NULL);
     }
 }
 
@@ -130,7 +143,6 @@ void bt_rx(void *params)
 #ifdef BT_SERIAL_DEBUG_RX
                 Serial.write(packet.data, packet.len);
 #endif
-                vTaskResume(bt.bt_process_task);
                 QUEUE_SEND(bt.bt_process_q, &packet);
             }
 
@@ -198,11 +210,16 @@ void send_test_data(void *params)
 
 void body_can_rx(void *params)
 {
+    attachInterrupt(GPIO_NUM_16, body_can_isr, FALLING);
     while (1)
     {
-        xSemaphoreTake(body_can.rx_sem, portMAX_DELAY);
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+#ifdef CAN_DEBUG
+        Serial.println("body_can_rx() unblocked");
+#endif
         can_frame frame = {0};
-        if (can_read_msg_buf(&body_can, &frame) && frame.id != 0)
+        byte result = can_read_msg_buf(&body_can, &frame);
+        if (result == CAN_OK && frame.id != 0)
         {
 #ifdef CAN_DEBUG
             Serial.printf("Body CAN RX 0x%03x: [%d]\n", frame.id, frame.len);
@@ -215,7 +232,9 @@ void body_can_rx(void *params)
                     {
                         memset(&frame.data, 0, frame.len);
                     }
+#ifdef CAN_TEST_DATA
                     vehicle_speed += 2;
+#endif
                     break;
                 case MOTOR2_ID:
                     vehicle_speed = (byte)((frame.data.bytes[3] * 100 * 128) / 10000);
@@ -239,9 +258,10 @@ void body_can_rx(void *params)
             }
 #endif
         }
-        else if (frame.id)
+        
+        if (result != 0)
         {
-            Serial.println("Body RX cannot read");
+            Serial.printf("Body RX cannot read (%d)\n", result);
         }
     }
 }
@@ -253,9 +273,10 @@ void body_can_tx(void *params)
         can_frame frame = {0};
         if (xQueueReceive(body_can.tx_q, &frame, portMAX_DELAY))
         {
-            if (!can_send_msg_buf(&body_can, &frame))
+            byte result = can_send_msg_buf(&body_can, &frame);
+            if (result)
             {
-                Serial.println("Body TX busy");
+                Serial.printf("Body TX busy (%d)\n", result);
             }
         }
         //vTaskDelay(CAN_TX_RELIEF_MS / portTICK_PERIOD_MS);
@@ -264,11 +285,16 @@ void body_can_tx(void *params)
 
 void haldex_can_rx(void *params)
 {
+    attachInterrupt(GPIO_NUM_17, haldex_can_isr, FALLING);
     while (1)
     {
-        xSemaphoreTake(haldex_can.rx_sem, portMAX_DELAY);
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+#ifdef CAN_DEBUG
+        Serial.println("haldex_can_rx() unblocked");
+#endif
         can_frame frame = {0};
-        if (can_read_msg_buf(&haldex_can, &frame) && frame.id != 0)
+        byte result = can_read_msg_buf(&haldex_can, &frame);
+        if (result == CAN_OK && frame.id != 0)
         {
 #ifdef CAN_DEBUG
             Serial.printf("Haldex CAN RX 0x%03x: [%d]\n", frame.id, frame.len);
@@ -288,9 +314,10 @@ void haldex_can_rx(void *params)
             haldex_engagement = frame.data.bytes[1] == SERIAL_PACKET_END ? 0xfe
                                                                          : frame.data.bytes[1];
         }
-        else if (frame.id)
+        
+        if (result != 0)
         {
-            Serial.println("Haldex RX cannot read");
+            Serial.printf("Haldex RX cannot read (%d)\n", result);
         }
     }
 }
@@ -302,9 +329,10 @@ void haldex_can_tx(void *params)
         can_frame frame = {0};
         if (xQueueReceive(haldex_can.tx_q, &frame, portMAX_DELAY))
         {
-            if (!can_send_msg_buf(&haldex_can, &frame))
+            byte result = can_send_msg_buf(&haldex_can, &frame);
+            if (result)
             {
-                Serial.println("Haldex TX busy");
+                Serial.printf("Haldex TX busy (%d)\n", result);
             }
         }
         //vTaskDelay(CAN_TX_RELIEF_MS / portTICK_PERIOD_MS);
