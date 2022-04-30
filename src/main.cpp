@@ -100,7 +100,7 @@ void IRAM_ATTR haldex_can_isr(void)
 }
 
 #ifdef STACK_DEBUG
-static void print_stack_hwm(void)
+static void print_stack_hwm(void *params)
 {
     Serial.printf("%s stack HWM %u\n", pcTaskGetTaskName(body_can.rx_task), uxTaskGetStackHighWaterMark(body_can.rx_task));
     Serial.printf("%s stack HWM %u\n", pcTaskGetTaskName(body_can.tx_task), uxTaskGetStackHighWaterMark(body_can.tx_task));
@@ -160,7 +160,7 @@ void setup()
     Serial.println("BT initialised");
 
     // init CAN0 bus, baudrate: 500k@16MHz
-    body_can.status = body_can.can_interface->begin(MCP_STD, CAN_500KBPS, MCP_8MHZ);
+    body_can.status = body_can.can_interface->begin(MCP_STD, CAN_500KBPS, MCP_20MHZ);
     //body_can.can_interface->enOneShotTX();
     if(body_can.status == CAN_OK)
     {
@@ -184,7 +184,7 @@ void setup()
     }
     
     // init CAN1 bus, baudrate: 500k@16MHz
-    haldex_can.status = haldex_can.can_interface->begin(MCP_STD, CAN_500KBPS, MCP_8MHZ);
+    haldex_can.status = haldex_can.can_interface->begin(MCP_STD, CAN_500KBPS, MCP_20MHZ);
     //haldex_can.can_interface->enOneShotTX();
     if(haldex_can.status == CAN_OK)
     {
@@ -253,57 +253,66 @@ void setup()
         NULL
     );
 
-    xTaskCreatePinnedToCore(
-        body_can_rx,
-        "body_can_rx",
-        CAN_STACK,
-        NULL,
-        5,
-        &body_can.rx_task,
-        0
-    );
+    if (body_can.status == CAN_OK)
+    {
+        xTaskCreatePinnedToCore(
+            body_can_rx,
+            "body_can_rx",
+            CAN_STACK,
+            NULL,
+            5,
+            &body_can.rx_task,
+            0
+        );
 
-    xTaskCreatePinnedToCore(
-        body_can_tx,
-        "body_can_tx",
-        CAN_STACK,
-        NULL,
-        4,
-        &body_can.tx_task,
-        0
-    );
+        xTaskCreatePinnedToCore(
+            body_can_tx,
+            "body_can_tx",
+            CAN_STACK,
+            NULL,
+            4,
+            &body_can.tx_task,
+            0
+        );
+    }
 
-    xTaskCreatePinnedToCore(
-        haldex_can_rx,
-        "haldex_can_rx",
-        CAN_STACK,
-        NULL,
-        5,
-        &haldex_can.rx_task,
-        1
-    );
+    if (haldex_can.status == CAN_OK)
+    {
+        xTaskCreatePinnedToCore(
+            haldex_can_rx,
+            "haldex_can_rx",
+            CAN_STACK,
+            NULL,
+            5,
+            &haldex_can.rx_task,
+            1
+        );
 
-    xTaskCreatePinnedToCore(
-        haldex_can_tx,
-        "haldex_can_tx",
-        CAN_STACK,
-        NULL,
-        4,
-        &haldex_can.tx_task,
-        1
-    );
+        xTaskCreatePinnedToCore(
+            haldex_can_tx,
+            "haldex_can_tx",
+            CAN_STACK,
+            NULL,
+            4,
+            &haldex_can.tx_task,
+            1
+        );
+    }
 
-    vTaskDelay(1000 / portTICK_PERIOD_MS);
 
 #ifdef CAN_TEST_DATA
-    xTaskCreate(
-        send_test_data,
-        "send_test_data",
-        CAN_STACK,
-        NULL,
-        1,
-        NULL
-    );
+    vTaskDelay(1000 / portTICK_PERIOD_MS);
+    if (body_can.status == CAN_OK && haldex_can.status == CAN_OK)
+    {
+        xTaskCreate(
+            send_test_data,
+            "send_test_data",
+            CAN_STACK,
+            NULL,
+            1,
+            NULL
+        );
+    }
 #endif
 
     vTaskDelete(NULL);
