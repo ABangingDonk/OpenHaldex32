@@ -22,19 +22,20 @@
 #define CAN_STACK 2176
 #define BT_STACK 2304
 
-#define CAN_TX_RELIEF_MS 10
-#define QUEUE_SEND_WAIT (0 / portTICK_PERIOD_MS)
-#define QUEUE_SEND(q, p) (uxQueueSpacesAvailable((q))) ? xQueueSendToBack((q), (p), QUEUE_SEND_WAIT) : 0
+#define CAN_COMMS_RELIEF_MS 1
+#define QUEUE_SEND_WAIT (100 / portTICK_PERIOD_MS)
+#define QUEUE_SEND(q, p) ((uxQueueSpacesAvailable((q))) ? xQueueSendToBack((q), (p), QUEUE_SEND_WAIT) : 0xff)
+//#define QUEUE_SEND(q, p) 0
 #define ARRAY_SIZE(array) (sizeof((array)) / sizeof((array)[0]))
 
 typedef struct can_s{
     byte status;
     SPIClass *spi_interface;
     MCP_CAN *can_interface;
-    TaskHandle_t rx_task;
-    TaskHandle_t tx_task;
-    QueueHandle_t tx_q;
+    TaskHandle_t comms_task;
+    QueueHandle_t outbox;
     SemaphoreHandle_t spi_sem;
+    bool inited;
     const char* name;
 }can_s;
 

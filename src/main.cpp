@@ -10,15 +10,16 @@ Preferences preferences;
 byte haldex_state;
 byte haldex_engagement;
 byte vehicle_speed;
+TaskHandle_t process_task;
 
 can_s body_can = {
     0,                          // CAN status
     NULL,                       // SPI interface
     new MCP_CAN(GPIO_NUM_15),   // CAN interface
-    NULL,                       // RX task
-    NULL,                       // TX task
-    NULL,                       // TX queue
+    NULL,                       // Comms task
+    NULL,                       // Outbox
     NULL,                       // CAN SPI semaphore
+    false,                      // Inited flag
     "Body"                      // Name
 };
 
@@ -26,34 +27,12 @@ can_s haldex_can = {
     0,                          // CAN status
     NULL,                       // SPI interface
     new MCP_CAN(GPIO_NUM_5),    // CAN interface
-    NULL,                       // RX task
-    NULL,                       // TX task
-    NULL,                       // TX queue
+    NULL,                       // Comms task
+    NULL,                       // Outbox
     NULL,                       // CAN SPI semaphore
+    false,                      // Inited flag
     "Haldex"                    // Name
 };
-
-byte can_send_msg_buf(can_s *can, can_frame *frame)
-{
-    byte ret;
-    if (xSemaphoreTake(can->spi_sem, portMAX_DELAY))
-    {
-        ret = can->can_interface->sendMsgBuf(frame->id, frame->len, frame->data.bytes);
-        xSemaphoreGive(can->spi_sem);
-    }
-    return ret;
-}
-
-byte can_read_msg_buf(can_s *can, can_frame *frame)
-{
-    byte ret;
-    if (xSemaphoreTake(can->spi_sem, portMAX_DELAY))
-    {
-        ret = can->can_interface->readMsgBuf(&frame->id, &frame->len, frame->data.bytes);
-        xSemaphoreGive(can->spi_sem);
-    }
-    return ret;
-}
 
 bool bt_send_msg_buf(bt_packet *packet)
 {
@@ -75,28 +54,6 @@ bool bt_read_msg_buf(byte terminator, bt_packet *packet)
         return true;
     }
     return false;
-}
-
-void IRAM_ATTR body_can_isr(void)
-{
-    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-    vTaskNotifyGiveFromISR(body_can.rx_task, &xHigherPriorityTaskWoken);
-    //xSemaphoreGiveFromISR(body_can.rx_sem, &xHigherPriorityTaskWoken);
-    if (xHigherPriorityTaskWoken)
-    {
-        portYIELD_FROM_ISR();
-    }
-}
-
-void IRAM_ATTR haldex_can_isr(void)
-{
-    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-    vTaskNotifyGiveFromISR(haldex_can.rx_task, &xHigherPriorityTaskWoken);
-    //xSemaphoreGiveFromISR(haldex_can.rx_sem, &xHigherPriorityTaskWoken);
-    if (xHigherPriorityTaskWoken)
-    {
-        portYIELD_FROM_ISR();
-    }
 }
 
 #ifdef STACK_DEBUG
@@ -131,8 +88,8 @@ void setup()
     body_can.spi_interface = new SPIClass(HSPI);
     haldex_can.spi_interface = new SPIClass(VSPI);
 
-    body_can.tx_q = xQueueCreate(16, sizeof(can_frame));
-    haldex_can.tx_q = xQueueCreate(16, sizeof(can_frame));
+    body_can.outbox = xQueueCreate(32, sizeof(can_frame*));
+    haldex_can.outbox = xQueueCreate(32, sizeof(can_frame*));
     bt.bt_process_q = xQueueCreate(32, sizeof(bt_packet));
     bt.bt_tx_q = xQueueCreate(32, sizeof(bt_packet));
 
@@ -253,55 +210,43 @@ void setup()
         NULL
     );
 
-    if (body_can.status == CAN_OK)
-    {
-        xTaskCreatePinnedToCore(
-            body_can_rx,
-            "body_can_rx",
-            CAN_STACK,
-            NULL,
-            5,
-            &body_can.rx_task,
-            0
-        );
-
-        xTaskCreatePinnedToCore(
-            body_can_tx,
-            "body_can_tx",
-            CAN_STACK,
-            NULL,
-            4,
-            &body_can.tx_task,
-            0
-        );
-    }
-
     if (haldex_can.status == CAN_OK)
     {
         xTaskCreatePinnedToCore(
-            haldex_can_rx,
-            "haldex_can_rx",
-            CAN_STACK,
-            NULL,
-            5,
-            &haldex_can.rx_task,
-            1
-        );
-
-        xTaskCreatePinnedToCore(
-            haldex_can_tx,
-            "haldex_can_tx",
+            haldex_can_comms,
+            "haldex_can_comms",
             CAN_STACK,
             NULL,
             4,
-            &haldex_can.tx_task,
+            &haldex_can.comms_task,
             1
         );
     }
 
+    if (body_can.status == CAN_OK)
+    {
+        xTaskCreatePinnedToCore(
+            body_can_comms,
+            "body_can_comms",
+            CAN_STACK,
+            NULL,
+            4,
+            &body_can.comms_task,
+            0
+        );
+    }
+
+    xTaskCreate(
+        can_process,
+        "can_process",
+        CAN_STACK,
+        NULL,
+        5,
+        &process_task
+    );
 
 #ifdef CAN_TEST_DATA
-    vTaskDelay(1000 / portTICK_PERIOD_MS);
+    //vTaskDelay(1000 / portTICK_PERIOD_MS);
     if (body_can.status == CAN_OK && haldex_can.status == CAN_OK)
     {
         xTaskCreate(
@@ -309,7 +254,7 @@ void setup()
             "send_test_data",
             CAN_STACK,
             NULL,
-            1,
+            6,
             NULL
         );
     }
